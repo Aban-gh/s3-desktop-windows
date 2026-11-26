@@ -1,0 +1,47 @@
+{
+  "name": "s3-desktop",
+  "version": "1.5.0",
+  "author": "GuiHui Wu (Aban-gh)",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "description": "Desktop browser for S3 and CloudFront",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "build": "vite build && electron-builder --win",
+    "start": "vite build && electron .",
+    "build:mac": "vite build && electron-builder --mac zip --arm64 --x64",
+    "build:mac:arm64": "vite build && electron-builder --mac zip --arm64",
+    "build:mac:intel": "vite build && electron-builder --mac zip --x64"
+  },
+  "dependencies": {
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "vite": "^6.0.5"
+  },
+  "build": {
+    "appId": "com.local.s3desktop",
+    "productName": "S3 Desktop",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json",
+      "LICENSE",
+      "NOTICE"
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "electron/cloud-courier.ico"
+    },
+    "mac": {
+      "target": "zip",
+      "icon": "electron/cloud-courier.icns",
+      "category": "public.app-category.utilities"
+    }
+  }
+}

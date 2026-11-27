@@ -1,0 +1,107 @@
+name: Desktop release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+env:
+  ASSET_SUFFIX: Windows-x64.exe
+
+jobs:
+  build:
+    if: github.repository == 'Aban-gh/s3-desktop-windows' && github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - id: package
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+      - run: npm ci
+      - name: Package and check the application architecture
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          npm run build -- --x64
+          if ($LASTEXITCODE -ne 0) { throw 'Windows packaging failed' }
+          $portable = @(Get-ChildItem -LiteralPath release -File -Filter '*.exe')
+          if ($portable.Count -ne 1) { throw 'Expected exactly one portable executable' }
+          $electron = Join-Path 'release/win-unpacked' 'S3 Desktop.exe'
+          $bytes = [IO.File]::ReadAllBytes($electron)
+          $peHeader = [BitConverter]::ToInt32($bytes, 0x3c)
+          if ([BitConverter]::ToUInt16($bytes, $peHeader + 4) -ne 0x8664) {
+            throw 'Expected an x64 Electron executable'
+          }
+          New-Item -ItemType Directory -Path release-assets | Out-Null
+          $target = Join-Path release-assets "S3-Desktop-$env:VERSION-$env:ASSET_SUFFIX"
+          Copy-Item -LiteralPath $portable[0].FullName -Destination $target
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash.ToLowerInvariant()
+          "$hash  $([IO.Path]::GetFileName($target))" |
+            Set-Content -Encoding ascii -LiteralPath release-assets/SHA256SUMS
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: desktop-release-assets
+          path: release-assets/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: desktop-release-assets
+          path: release-assets/
+      - name: Publish the versioned release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          asset="S3-Desktop-$VERSION-$ASSET_SUFFIX"
+          (cd release-assets && sha256sum --check SHA256SUMS)
+          test -s "release-assets/$asset"
+
+          if gh release view "$tag" --json isDraft --jq .isDraft > existing-release; then
+            if [[ "$(cat existing-release)" == false ]]; then
+              gh release view "$tag" --json assets --jq '.assets[].name' | grep -Fx "$asset"
+              gh release view "$tag" --json assets --jq '.assets[].name' | grep -Fx SHA256SUMS
+              exit 0
+            fi
+            gh release upload "$tag" "release-assets/$asset" release-assets/SHA256SUMS --clobber
+            gh release edit "$tag" --draft=false
+            exit 0
+          fi
+
+          gh release create "$tag" "release-assets/$asset" release-assets/SHA256SUMS \
+            --target "$GITHUB_SHA" --title "S3 Desktop $tag" --notes-file RELEASE-NOTES.md
